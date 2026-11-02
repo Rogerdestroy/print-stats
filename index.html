@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>影印紙用印量統計</title>
+<meta name="description" content="讀取影印機匯出的印量 Excel,統計各班與各使用者的用印量與費用;資料只在瀏覽器內處理,不會上傳。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='4' width='20' height='24' rx='3' fill='%232a78d6'/%3E%3Crect x='10' y='10' width='12' height='2' fill='white'/%3E%3Crect x='10' y='15' width='12' height='2' fill='white'/%3E%3Crect x='10' y='20' width='8' height='2' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>影印紙用印量統計</h1>
+      <div class="sub" id="dsub">讀取中…</div>
+    </div>
+    <div class="hbtns">
+      <button class="ghost" id="syncBtn" style="display:none" title="重新讀取「資料」資料夾">↻ 重新讀取</button>
+      <button class="ghost" id="dataBtn">資料 ▾</button>
+      <button class="ghost" id="themeBtn" title="切換 自動 / 淺色 / 深色">主題:自動</button>
+    </div>
+  </header>
+</div>
+<div class="sticky" id="stick">
+  <div class="wrap"><div class="filters" id="filters"></div></div>
+  <div class="tabbar"><div class="wrap"><nav class="tabs" role="tablist" id="tabs"></nav></div></div>
+</div>
+<div class="wrap" id="banner" style="padding-top:12px"></div>
+<main class="wrap" id="view"></main>
+<div id="tip" role="tooltip"></div>
+<div id="overlay">放開滑鼠,把檔案或資料夾加進來</div>
+<div id="busy" role="alert" aria-busy="true">處理中…</div>
+<div id="toasts" role="status" aria-live="polite"></div>
+<input type="file" id="fileIn" multiple accept=".xlsx,.xlsm,.xls,.csv" hidden>
+<input type="file" id="dirIn" webkitdirectory multiple hidden>
+<dialog id="dlg" aria-label="費用算式"><div id="dlgBody"></div><div style="text-align:right;margin-top:10px"><button class="ghost" id="dlgClose">關閉</button></div></dialog>
+<dialog id="dataDlg" aria-label="資料來源"><div id="dataBody"></div><div style="text-align:right;margin-top:10px"><button class="ghost" id="dataClose">關閉</button></div></dialog>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

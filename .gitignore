@@ -1,0 +1,8 @@
+# 印量資料含教師姓名、考卷檔名與帳號,絕對不可上傳到 GitHub
+資料/
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+_test/
+desktop.ini
