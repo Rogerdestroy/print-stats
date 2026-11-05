@@ -599,21 +599,21 @@ function viewOverview(){
   <div class="card"><div class="sech"><h2>誰在用 <small>${METRIC[S.metric]}</small></h2></div>
     <div class="comp" role="img" aria-label="帳號類型占比">${K.map(x=>`<i class="${x.c}" style="width:${tot?mv(x.g)/tot*100:0}%" data-tip="${esc(fmtV(mv(x.g))+'||'+KIND[x.k]+' · '+share(mv(x.g),tot)+'%')}"></i>`).join('')}</div>
     <div class="legend">${K.map(x=>`<button data-act="goKind" data-arg="${x.k}"><span class="sw ${x.c}"></span>${KIND[x.k]} <b>${fmtV(mv(x.g))}</b> <span class="mut">${share(mv(x.g),tot)}%</span></button>`).join('')}</div></div>
-  <div class="card" style="margin-top:14px"><div class="sech"><h2>每月趨勢 <small>${METRIC[S.metric]}</small></h2><span>深色 = 目前期間 · 點長條只看該月</span></div>
+  ${SNAP&&SNAP.level>=2?'':`<div class="card" style="margin-top:14px"><div class="sech"><h2>每月趨勢 <small>${METRIC[S.metric]}</small></h2><span>深色 = 目前期間 · 點長條只看該月</span></div>
     <div class="chart" id="mchart"></div>
-    <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">以表格檢視</summary>${monthTable()}</details></div>
+    <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">以表格檢視</summary>${monthTable()}</details></div>`}
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><div class="sech"><h2>各班用量 Top 8</h2><button class="lnk" data-act="tab" data-arg="classes">全部班級 →</button></div>
       ${bars(cls.slice(0,8).map(g=>({label:g.k+' 班',val:mv(g),text:fmtV(mv(g)),share:share(mv(g),tot),act:'goClass',arg:g.k,tip:fmtV(mv(g))+'||'+g.k+' 班 · '+fI(g.jobs)+' 筆'})),cmax)}</div>
     <div class="card"><div class="sech"><h2>使用者 Top 8</h2><button class="lnk" data-act="tab" data-arg="users">全部使用者 →</button></div>
       ${bars(us.slice(0,8).map(g=>({label:disp(g.k),val:mv(g),text:fmtV(mv(g)),share:share(mv(g),tot),act:'goUser',arg:g.k,tip:fmtV(mv(g))+'||'+disp(g.k)+' · '+fI(g.jobs)+' 筆'})),umax,{lw:128})}</div>
   </div>
-  <div class="grid g2" style="margin-top:14px">
+  ${SNAP&&SNAP.level>=1?'':`<div class="grid g2" style="margin-top:14px">
     <div class="card"><div class="sech"><h2>紙張尺寸</h2><span>只計有列印面數的工作</span></div>
       ${bars(sizeItems.map(g=>({label:g.k,val:mv(g),text:fmtV(mv(g)),share:share(mv(g),sizeItems.reduce((a,x)=>a+mv(x),0)),tip:fmtV(mv(g))+'||'+g.k})),smax,{lw:72})}</div>
     <div class="card"><div class="sech"><h2>工作類型</h2><span>影印 / 列印(掃描不計費)</span></div>
       ${bars([...byMode.values()].sort((a,b)=>mv(b)-mv(a)).map(g=>({label:({Copy:'影印 Copy',Print:'列印 Print'})[g.k]||g.k,val:mv(g),text:fmtV(mv(g)),tip:fmtV(mv(g))+'||'+g.k})),Math.max(0,...[...byMode.values()].map(mv)),{lw:96})}</div>
-  </div>`;
+  </div>`}`;
 }
 function monthTable(){
   const by=group(R,o=>o.ym);
@@ -1042,7 +1042,7 @@ document.addEventListener('change',e=>{
   else if(id==='oMerge'){S.merge=e.target.checked;S.det.user='';S.upage=1;savePrefs();render();$('details.opt').open=true;}
   else if(id==='oJob'){S.showJob=e.target.checked;savePrefs();render();$('details.opt').open=true;}
   else if(id==='startIn'){if(/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)){S.startDate=e.target.value;savePrefs();if(S.preset==='start')applyPreset();header();render();}}
-  else if(id==='shPersonal')openShare(e.target.checked);
+  else if(id==='shPersonal'||id==='shLevel')openShare($('#shPersonal').checked,id==='shLevel'?+$('#shLevel').value:null);
   else if(id==='cSort'){S.sortCls=e.target.checked;render();}
   else if(id==='cmpGrade'){S.cmpGrade=e.target.value;render();}
   else if(id==='ukind'){S.ukind=e.target.value;S.upage=1;renderUsersTable();}
@@ -1163,28 +1163,45 @@ async function gunzipB64(b64){
   const u=Uint8Array.from(bin,c=>c.charCodeAt(0));
   return new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
 }
-function buildPayload(incl){
-  const ai=new Map(),a=[],zi=new Map(),z=[],rows=new Map();
+const LEVELS=['完整(每月、紙張、工作類型)','精簡(省略紙張與工作類型)','最短(再省略每月趨勢)'];
+// level:0 完整;1 合併紙張與工作類型;2 再合併月份
+function buildPayload(incl,level=0){
+  const rows=new Map(),info=new Map();
   for(const o of CUR){
     if(o.m==='Scan')continue;
     const show=o.a.k==='class'||incl,name=show?o.u:OTHER_NAME;
-    if(!ai.has(name)){ai.set(name,a.length);a.push(show?[name,o.a.k,o.a.c,o.a.s]:[name,'staff',0,'']);}
-    if(!zi.has(o.z)){zi.set(o.z,z.length);z.push(o.z);}
-    const key=[ai.get(name),o.ym,o.m,zi.get(o.z)].join('|');
-    const r=rows.get(key)||[ai.get(name),o.ym,o.m,zi.get(o.z),0,0,0,0];
-    r[4]+=o.c[3];r[5]+=o.l;r[6]+=o.sp;r[7]+=o.w;rows.set(key,r);
+    if(!info.has(name))info.set(name,show?o.a:{k:'staff',c:0,s:''});
+    const ym=level>=2?'':o.ym,m=level>=1?'':o.m,z=level>=1?'':o.z,key=[name,ym,m,z].join('\u0001');
+    const r=rows.get(key)||{name,ym,m,z,fee:0,sides:0,sheets:0,jobs:0};
+    r.fee+=o.c[3];r.sides+=o.l;r.sheets+=o.sp;r.jobs+=o.w;rows.set(key,r);
   }
-  for(const r of rows.values())r[4]=rd(r[4]);
-  return{v:1,by:new Date().toISOString().slice(0,10),p:periodText(),t:SNAP_TABS.includes(S.tab)?S.tab:'overview',m:S.metric,c:S.cls,g:S.cmpGrade,a,z,r:[...rows.values()]};
+  const n=[...info.keys()].sort(),ni=new Map(n.map((x,i)=>[x,i]));
+  const uniq=f=>[...new Set([...rows.values()].map(f))].sort();
+  const y=uniq(r=>r.ym),mo=uniq(r=>r.m),z=uniq(r=>r.z);
+  // 只記無法由名稱推得的帳號屬性
+  const x={};
+  n.forEach((name,i)=>{const a=info.get(name),d=classify(name);if(a.k!==d.k||a.k==='class'&&(a.c!==d.c||a.s!==d.s))x[i]=[a.k,a.c,a.s];});
+  const list=[...rows.values()].sort((a,b)=>ni.get(a.name)-ni.get(b.name)||(a.ym<b.ym?-1:a.ym>b.ym?1:0)||(a.m<b.m?-1:a.m>b.m?1:0)||(a.z<b.z?-1:a.z>b.z?1:0));
+  // 費用都是 0.025 的倍數,存成整數最省;若有例外(未來改單價)退回千分之一
+  const f=list.every(r=>Math.abs(r.fee*40-Math.round(r.fee*40))<1e-6)?40:1000;
+  let prev=0;
+  const cols=[list.map(r=>{const v=ni.get(r.name),d=v-prev;prev=v;return d;}),list.map(r=>y.indexOf(r.ym)),list.map(r=>mo.indexOf(r.m)),list.map(r=>z.indexOf(r.z)),
+    list.map(r=>Math.round(r.fee*f)),list.map(r=>r.sides),list.map(r=>r.sides-r.sheets),list.map(r=>r.jobs)];
+  return{v:2,by:new Date().toISOString().slice(0,10),p:periodText(),t:SNAP_TABS.includes(S.tab)?S.tab:'overview',m:S.metric,c:S.cls,g:S.cmpGrade,l:level,n,x,y,mo,z,f,r:cols};
 }
-async function openShare(incl=false){   // 每次開啟預設不列出個人帳號
-  shareUrl=SITE+'#s='+await gzipB64(JSON.stringify(buildPayload(incl)));
+const shareLink=async(incl,level)=>SITE+'#s='+await gzipB64(JSON.stringify(buildPayload(incl,level)));
+async function openShare(incl=false,level=null){   // 每次開啟預設不列出個人帳號
+  if(level===null){   // 自動選:連結夠短的最詳細版本
+    for(level=0;level<LEVELS.length;level++){shareUrl=await shareLink(incl,level);if(shareUrl.length<=LONG_URL)break;}
+    if(level===LEVELS.length)level=LEVELS.length-1;
+  }else shareUrl=await shareLink(incl,level);
   const long=shareUrl.length>LONG_URL;
   $('#dlgBody').innerHTML=`<h2 style="margin:0 0 8px;font-size:17px">分享目前的統計</h2>
    <div class="hint" style="line-height:1.7">期間 <b>${periodText()}</b>。對方打開連結就能看總覽、班級、使用者,不需要資料檔。<br>只含彙總數字,不含逐筆紀錄與工作名稱;內容固定在產生當下,不會更新。<br>統計內容就在連結裡,拿到連結的人都看得到。</div>
    <label class="hint" style="display:block;margin:10px 0"><input type="checkbox" id="shPersonal"${incl?' checked':''}> 列出老師個人帳號的用量(未勾選時併成一列「${OTHER_NAME}」)</label>
+   <label class="hint" style="display:block;margin:10px 0">詳細度 <select id="shLevel" aria-label="詳細度">${LEVELS.map((t,i)=>`<option value="${i}"${i===level?' selected':''}>${t}</option>`).join('')}</select> <span>目前連結 ${fI(shareUrl.length)} 字元</span></label>
    <textarea id="shUrl" readonly rows="3" style="width:100%;font:12px monospace;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px" aria-label="分享連結">${esc(shareUrl)}</textarea>
-   ${long?`<div class="notice" style="margin:8px 0">連結較長(${fI(shareUrl.length)} 字元),部分通訊軟體可能截斷。建議改用「下載成檔案」,把檔案傳給對方。</div>`:''}
+   ${long?`<div class="notice" style="margin:8px 0">連結仍偏長,部分通訊軟體可能截斷。可再降低詳細度、縮短期間,或改用「下載成檔案」。</div>`:''}
    <div class="bar-row" style="margin-top:8px"><button class="btn" id="shCopy">複製連結</button><button class="btn alt" id="shFile">下載成檔案</button></div>`;
   if(!$('#dlg').open)$('#dlg').showModal();
 }
@@ -1200,7 +1217,22 @@ function fileShare(){
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 }
 // 連結內容來自外部,全部檢查過才使用
+function fromV2(p){
+  const c=p.r,f=p.f===40?40:1000;
+  if(!Array.isArray(p.n)||!Array.isArray(c)||c.length!==8||!c.every(a=>Array.isArray(a)&&a.length===c[0].length))throw new Error('bad');
+  const a=p.n.map((name,i)=>{
+    const nm=String(name),e=p.x&&p.x[i];
+    if(Array.isArray(e))return[nm,e[0],e[1],e[2]];
+    const d=classify(nm);return[nm,d.k,d.c,d.s];
+  });
+  let ai=0;
+  const y=Array.isArray(p.y)?p.y:[],mo=Array.isArray(p.mo)?p.mo:[];
+  const r=c[0].map((d,i)=>{ai+=d;return[ai,y[c[1][i]]||YM_NONE(p),mo[c[2][i]]||'',c[3][i],c[4][i]/f,c[5][i],c[5][i]-c[6][i],c[7][i]];});
+  return{...p,v:1,a,r};
+}
+const YM_NONE=p=>String(p.by||'').slice(0,7);   // 「最短」版本沒有月份,歸在產生當月(不會顯示)
 function loadSnapshot(p){
+  if(p&&p.v===2)p=fromV2(p);
   if(!p||p.v!==1||!Array.isArray(p.a)||!Array.isArray(p.r)||!Array.isArray(p.z)||p.r.length>100000)throw new Error('bad');
   const n=v=>{const x=Number(v);if(!isFinite(x)||x<0)throw new Error('bad');return x;};
   const A=p.a.map(x=>{
@@ -1223,7 +1255,7 @@ function loadSnapshot(p){
   if(METRIC[p.m])S.metric=p.m;
   if(CLASS_SET.has(p.c))S.cls=p.c;
   if(GRADES.some(g=>g.code===p.g))S.cmpGrade=p.g;
-  SNAP={p:/^[\d\/–]+$/.test(p.p)?p.p:'—',by:/^\d{4}-\d{2}-\d{2}$/.test(p.by)?p.by:''};
+  SNAP={p:/^[\d\/–]+$/.test(p.p)?p.p:'—',by:/^\d{4}-\d{2}-\d{2}$/.test(p.by)?p.by:'',level:[0,1,2].includes(p.l)?p.l:0};
 }
 window.addEventListener('hashchange',()=>location.reload());
 
