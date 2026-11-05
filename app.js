@@ -42,10 +42,11 @@ function ymRange(a,b){const o=[];for(let c=a;c<=b;c=ymAdd(c,1))o.push(c);return 
 const A4='A4 210x297mm',B4='B4 257x364mm',A3='A3 297x420mm';
 
 /* ================= 儲存(瀏覽器內,關掉網頁資料仍在) ================= */
+let SNAP=null;   // 開啟分享連結時 = 連結內的快照;此模式不讀寫本機資料
 const PK='printstat.v2';
 function loadPrefs(){try{return JSON.parse(localStorage.getItem(PK))||{}}catch(e){return{}}}
 const P=loadPrefs();
-function savePrefs(){try{localStorage.setItem(PK,JSON.stringify({theme:S.theme,metric:S.metric,merge:S.merge,showJob:S.showJob,startDate:S.startDate,preset:S.preset==='custom'?'':S.preset}))}catch(e){}}
+function savePrefs(){if(SNAP)return;try{localStorage.setItem(PK,JSON.stringify({theme:S.theme,metric:S.metric,merge:S.merge,showJob:S.showJob,startDate:S.startDate,preset:S.preset==='custom'?'':S.preset}))}catch(e){}}
 let _db=null;
 function openDB(){
   if(_db)return _db;
@@ -326,6 +327,7 @@ async function resync(ask){
 }
 function updateBanner(){
   const el=$('#banner');
+  if(SNAP){el.innerHTML=`<div class="notice">這是 ${esc(SNAP.by)} 產生的分享快照,只含彙總統計,不含逐筆紀錄,也不會更新。<a href="${SITE}" style="margin-left:8px">開啟自己的資料</a></div>`;return;}
   if(!FS.handle){el.innerHTML='';return;}
   ensurePerm(false).then(ok=>{el.innerHTML=ok?'':`<div class="notice">已連結資料夾「${esc(FS.handle.name)}」,瀏覽器需要你再按一次才能讀取。<button class="btn" data-act="reconnect">重新讀取資料夾</button></div>`;});
 }
@@ -427,7 +429,7 @@ function rebuildAll(){
     DROP.dup+=st.dup;DROP.nodate+=st.nodate;
   });
   HAS_X=FILES.some(f=>f.hasX);
-  for(const o of R){o.c=calc(o);o.sp=sheetsOf(o);o.a=acctOf(o.u);}
+  for(const o of R){o.c=calc(o);o.sp=sheetsOf(o);o.a=acctOf(o.u);o.w=o.m==='Scan'?0:1;}
   // 疑似重複列印:同帳號+同檔名+同份數/面數/紙張,3 分鐘內再次送出(只看 Print;數字、太短、通用檔名不算)
   const last=new Map();
   for(const o of R.slice().sort((a,b)=>a.t<b.t?-1:a.t>b.t?1:a.i-b.i)){
@@ -493,17 +495,18 @@ let CUR=[];
 function refresh(){CUR=R.filter(o=>o.day>=S.from&&o.day<=S.to);}
 function group(rows,keyFn){
   const M=new Map();
-  for(const o of rows){const k=keyFn(o);if(k==null)continue;let g=M.get(k);if(!g){g={k,fee:0,sides:0,sheets:0,jobs:0,n:0};M.set(k,g);}g.fee+=fee(o);g.sides+=o.l;g.sheets+=o.sp;if(o.m!=='Scan')g.jobs++;g.n++;}
+  for(const o of rows){const k=keyFn(o);if(k==null)continue;let g=M.get(k);if(!g){g={k,fee:0,sides:0,sheets:0,jobs:0,n:0};M.set(k,g);}g.fee+=fee(o);g.sides+=o.l;g.sheets+=o.sp;g.jobs+=o.w;g.n++;}
   return M;
 }
 const mv=g=>S.metric==='fee'?g.fee:S.metric==='sides'?g.sides:S.metric==='sheets'?g.sheets:g.jobs;
 const fmtV=v=>S.metric==='fee'?fM(v):fI(v);
-const sum=rows=>{const a={fee:0,sides:0,sheets:0,jobs:0,n:0};for(const o of rows){a.fee+=fee(o);a.sides+=o.l;a.sheets+=o.sp;if(o.m!=='Scan')a.jobs++;a.n++;}return a;};
+const sum=rows=>{const a={fee:0,sides:0,sheets:0,jobs:0,n:0};for(const o of rows){a.fee+=fee(o);a.sides+=o.l;a.sheets+=o.sp;a.jobs+=o.w;a.n++;}return a;};
 const subjLabel=code=>{
   const parts=String(code).split('_').map(p=>CONFIG.subjects[p.toUpperCase()]||p);
   const zh=parts.join('-');return zh===code?code:code+' '+zh;
 };
 function periodText(){
+  if(SNAP)return SNAP.p;
   const ds=CUR.map(o=>o.day).filter(Boolean),dl=d=>d.replace(/-/g,'/');
   if(!ds.length)return S.from?dl(S.from)+'–'+dl(S.to):'—';
   const a=ds.reduce((x,y)=>x<y?x:y),b=ds.reduce((x,y)=>x>y?x:y);
@@ -531,8 +534,13 @@ function download(name,rows){
 const stamp=()=>periodText().replace(/\//g,'').replace('–','-');
 
 /* ================= 篩選列 / 分頁 ================= */
-const TABS=[['overview','總覽'],['classes','班級'],['users','使用者'],['detail','明細'],['check','檢查']];
+const TABS_ALL=[['overview','總覽'],['classes','班級'],['users','使用者'],['detail','明細'],['check','檢查']];
 function renderFilters(){
+  if(SNAP){
+    $('#filters').innerHTML=`<span class="hint">期間 <b>${periodText()}</b></span><span class="seg" role="group" aria-label="指標">${Object.entries(METRIC).map(([k,t])=>`<button data-metric="${k}" aria-pressed="${S.metric===k}">${t}</button>`).join('')}</span>`;
+    $('#tabs').innerHTML=TABS_ALL.filter(([k])=>SNAP_TABS.includes(k)).map(([k,t])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${t}</button>`).join('');
+    return;
+  }
   const opts=[['start','自 '+S.startDate.replace(/-/g,'/')+' 起(預設)'],['all','全部期間']]
     .concat(SEMS.map(s=>['sem:'+s,s+' 學期']))
     .concat(SYS.map(s=>['sy:'+s,s+' 學年(全年)']))
@@ -545,7 +553,7 @@ function renderFilters(){
       <label><input type="checkbox" id="oMerge"${S.merge?' checked':''}><span>合併同一人的帳號<small>ELE_x、EIGHT_x、x 視為同一人(僅影響「使用者」)</small></span></label>
       <label><input type="checkbox" id="oJob"${S.showJob?' checked':''}><span>顯示工作名稱(檔名)<small>含個資,分享畫面前請先關閉</small></span></label>
     </div></details>`;
-  $('#tabs').innerHTML=TABS.map(([k,t])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${t}${k==='check'?issueBadge():''}</button>`).join('');
+  $('#tabs').innerHTML=TABS_ALL.filter(([k])=>!SNAP||SNAP_TABS.includes(k)).map(([k,t])=>`<button role="tab" data-tab="${k}" aria-selected="${S.tab===k}">${t}${k==='check'?issueBadge():''}</button>`).join('');
 }
 function issueBadge(){const n=CUR.filter(o=>(o.fl&(F.MISS|F.DIFF))||((o.fl&F.UNREG)&&o.c[3]>0)).length;return n?`<span class="badge" title="需留意的列數">${n}</span>`:'';}
 
@@ -576,7 +584,7 @@ function viewOverview(){
   const byMode=group(CUR.filter(o=>o.m!=='Scan'),o=>o.m||'—');
   const sizeItems=['A4','B4','A3','其他尺寸'].map(k=>bySize.get(k)).filter(Boolean);
   const smax=Math.max(0,...sizeItems.map(mv));
-  const nolist=!REG.size?`<div class="notice">尚未載入影印機的帳號列表,目前只能依帳號名稱推斷班級。<button class="ghost" data-act="pickFiles">載入帳號列表 .csv</button></div>`:'';
+  const nolist=(!REG.size&&!SNAP)?`<div class="notice">尚未載入影印機的帳號列表,目前只能依帳號名稱推斷班級。<button class="ghost" data-act="pickFiles">載入帳號列表 .csv</button></div>`:'';
   return`${nolist}
   <div class="hero"><div class="lab">${heroL}</div>
     <div class="num">${fI(heroV)}<small>${S.metric==='fee'?'元':S.metric==='sides'?'面':S.metric==='sheets'?'張':'筆'}</small></div>
@@ -673,7 +681,7 @@ function classDetail(c){
   const bs=[...group(rows,o=>o.a.s).values()].sort((a,b)=>mv(b)-mv(a));
   const ba=[...group(rows,o=>o.u).values()].sort((a,b)=>mv(b)-mv(a));
   const tot=bs.reduce((a,g)=>a+mv(g),0);
-  return`<div class="card"><div class="sech"><h2>${c} 班 <small>${periodText()}</small></h2><span><button class="ghost" data-act="goClassRows" data-arg="${c}">看逐筆明細 →</button> <button class="ghost" data-act="selClass" data-arg="">收合</button></span></div>
+  return`<div class="card"><div class="sech"><h2>${c} 班 <small>${periodText()}</small></h2><span>${SNAP?'':`<button class="ghost" data-act="goClassRows" data-arg="${c}">看逐筆明細 →</button> `}<button class="ghost" data-act="selClass" data-arg="">收合</button></span></div>
    <div class="hint" style="margin-bottom:8px">費用 <b>${fM(t.fee)}</b> 元 · 張數 <b>${fI(t.sheets)}</b> · 面數 <b>${fI(t.sides)}</b> · 工作 <b>${fI(t.jobs)}</b> 筆 · ${ba.length} 個帳號${CONFIG.sizes[c]?` · ${CONFIG.sizes[c]} 人,每人平均 <b>${fM(Math.round(t.fee/CONFIG.sizes[c]*100)/100)}</b> 元 / ${fI(Math.round(t.sides/CONFIG.sizes[c]))} 面`:''}</div>${budgetLine(c,t.fee)}
    <div class="grid g2"><div><div class="sech"><h3>依科目</h3></div>${bars(bs.map(g=>({label:g.k||'—',sub:CONFIG.subjects[String(g.k).toUpperCase()]||'',val:mv(g),text:fmtV(mv(g)),share:share(mv(g),tot),tip:fmtV(mv(g))+'||'+subjLabel(g.k)})),bs.length?mv(bs[0]):0,{lw:120})}</div>
    <div><div class="sech"><h3>依帳號</h3></div><div class="tw"><table><thead><tr><th>帳號</th><th class="n">${METRIC[S.metric]}</th><th class="n">筆數</th></tr></thead><tbody>${
@@ -683,7 +691,7 @@ function cmpData(){
   const gr=GRADES.find(g=>g.code===S.cmpGrade);
   const rows=CUR.filter(o=>o.a.k==='class'&&gr.classes.includes(o.a.c));
   const M=new Map();
-  for(const o of rows){let m=M.get(o.a.s);if(!m){m=new Map();M.set(o.a.s,m);}let g=m.get(o.a.c);if(!g){g={fee:0,sides:0,sheets:0,jobs:0};m.set(o.a.c,g);}g.fee+=fee(o);g.sides+=o.l;g.sheets+=o.sp;if(o.m!=='Scan')g.jobs++;}
+  for(const o of rows){let m=M.get(o.a.s);if(!m){m=new Map();M.set(o.a.s,m);}let g=m.get(o.a.c);if(!g){g={fee:0,sides:0,sheets:0,jobs:0};m.set(o.a.c,g);}g.fee+=fee(o);g.sides+=o.l;g.sheets+=o.sp;g.jobs+=o.w;}
   const subs=[...M.keys()].map(s=>({s,tot:gr.classes.reduce((a,c)=>a+(M.get(s).has(c)?mv(M.get(s).get(c)):0),0)})).sort((a,b)=>b.tot-a.tot);
   return{gr,M,subs};
 }
@@ -725,9 +733,9 @@ function renderUsersTable(){
   const rows=userRows(),tot=rows.reduce((a,r)=>a+r.val,0),PS=100,show=rows.slice(0,PS*S.upage);
   const th=(k,t,n)=>`<th class="${n?'n':''}"><button data-act="sortU" data-arg="${k}" aria-label="依${t}排序">${t}${S.usort===k?(S.udir<0?' ▾':' ▴'):''}</button></th>`;
   const max=rows.length?Math.max(...rows.map(r=>r.val)):0;
-  $('#utbl').innerHTML=`<div class="hint" style="margin-bottom:6px">${fI(rows.length)} 個${S.merge?'使用者':'帳號'} · 合計 ${fmtV(tot)}(${METRIC[S.metric]}) · 點列可看逐筆明細${REG.size&&S.uzero?` · 影印機共登錄 ${fI(REG.size)} 個帳號(取消「隱藏 0 用量」可看全部)`:''}</div>
+  $('#utbl').innerHTML=`<div class="hint" style="margin-bottom:6px">${fI(rows.length)} 個${S.merge?'使用者':'帳號'} · 合計 ${fmtV(tot)}(${METRIC[S.metric]})${SNAP?'':' · 點列可看逐筆明細'}${REG.size&&S.uzero?` · 影印機共登錄 ${fI(REG.size)} 個帳號(取消「隱藏 0 用量」可看全部)`:''}</div>
    <div class="tw tall"><table><thead><tr><th class="n">#</th>${th('name','帳號')}${th('kind','類型')}${th('cls','班級',1)}${th('fee','費用(元)',1)}${th('sheets','張數',1)}${th('sides','面數',1)}${th('jobs','工作數',1)}<th class="n" title="每位老師每學期 ${CONFIG.teacherQuota} 元額度">個人額度餘額</th><th>占比</th></tr></thead><tbody>${
-    show.map((r,i)=>`<tr data-act="goUser" data-arg="${esc(r.key)}"><td class="n mut">${i+1}</td><td><button class="lnk"${r.members.size>1?` data-tip="${esc('合併帳號||'+[...r.members].join('、'))}"`:''}>${esc(r.name)}</button>${r.members.size>1?` <span class="pill k">${r.members.size} 帳號</span>`:''}${r.kind==='unknown'?' '+pill('未登錄','w'):''}${tagOf(r.name)?' '+pill(tagOf(r.name),'k'):''}</td><td>${KIND[r.kind]}</td><td class="n">${r.cls||''}</td><td class="n">${fM(r.fee)}</td><td class="n">${fI(r.sheets)}</td><td class="n">${fI(r.sides)}</td><td class="n">${fI(r.jobs)}</td><td class="n">${r.kind==='staff'?(r.fee<=CONFIG.teacherQuota?fM(CONFIG.teacherQuota-r.fee):pill('超出 '+fM(r.fee-CONFIG.teacherQuota),'e')):''}</td><td style="min-width:110px"><div class="bl-t" style="height:10px"><i style="width:${max?r.val/max*100:0}%;position:absolute;left:0;top:0;bottom:0;background:var(--s1);border-radius:0 4px 4px 0;min-width:${r.val>0?2:0}px"></i></div></td></tr>`).join('')}</tbody></table></div>
+    show.map((r,i)=>`<tr data-act="goUser" data-arg="${esc(r.key)}"><td class="n mut">${i+1}</td><td><button class="lnk"${r.members.size>1?` data-tip="${esc('合併帳號||'+[...r.members].join('、'))}"`:''}>${esc(r.name)}</button>${r.members.size>1?` <span class="pill k">${r.members.size} 帳號</span>`:''}${r.kind==='unknown'?' '+pill('未登錄','w'):''}${tagOf(r.name)?' '+pill(tagOf(r.name),'k'):''}</td><td>${KIND[r.kind]}</td><td class="n">${r.cls||''}</td><td class="n">${fM(r.fee)}</td><td class="n">${fI(r.sheets)}</td><td class="n">${fI(r.sides)}</td><td class="n">${fI(r.jobs)}</td><td class="n">${r.kind==='staff'&&r.name!==OTHER_NAME?(r.fee<=CONFIG.teacherQuota?fM(CONFIG.teacherQuota-r.fee):pill('超出 '+fM(r.fee-CONFIG.teacherQuota),'e')):''}</td><td style="min-width:110px"><div class="bl-t" style="height:10px"><i style="width:${max?r.val/max*100:0}%;position:absolute;left:0;top:0;bottom:0;background:var(--s1);border-radius:0 4px 4px 0;min-width:${r.val>0?2:0}px"></i></div></td></tr>`).join('')}</tbody></table></div>
    ${rows.length>show.length?`<div class="pager"><span>已顯示 ${show.length} / ${rows.length}</span><button class="ghost" data-act="moreU">再顯示 100 筆</button></div>`:''}`;
 }
 
@@ -931,7 +939,7 @@ function openData(){
 /* ================= 主繪製 ================= */
 function render(){
   const v=$('#view');
-  if(!SRC.files.size){
+  if(!SNAP&&!SRC.files.size){
     $('#filters').innerHTML='';$('#tabs').innerHTML='';
     $('#stick').style.display='none';
     v.innerHTML=viewWelcome();document.title='影印紙用印量統計';return;
@@ -950,7 +958,10 @@ function render(){
 }
 function header(){
   const n=SRC.files.size;
+  $('#shareBtn').style.display=(!SNAP&&R.length)?'':'none';
+  $('#dataBtn').style.display=SNAP?'none':'';
   $('#dsub').textContent=n?`預設自 ${S.startDate.replace(/-/g,'/')} 起 ·${R.length?`資料 ${ymLabel(YM_MIN)}–${ymLabel(YM_MAX)} · ${fI(R.length)} 筆`:'尚無計入的資料'} · ${n} 個檔案${REG.size?` · 影印機帳號 ${fI(REG.size)} 個`:''}`:'尚未載入資料';
+  if(SNAP)$('#dsub').textContent=`分享快照 · ${SNAP.p} · ${fI(R.reduce((a,o)=>a+o.w,0))} 筆工作`;
   $('#dataBtn').textContent=n?'資料 ▾':'資料';
   const t={auto:'自動',light:'淺色',dark:'深色'};
   $('#themeBtn').textContent='主題:'+t[S.theme];
@@ -972,6 +983,9 @@ document.addEventListener('click',e=>{
   if(e.target.id==='dlgClose'){$('#dlg').close();return;}
   if(e.target.id==='dataClose'){$('#dataDlg').close();return;}
   if(e.target.id==='dataBtn'){openData();return;}
+  if(e.target.id==='shareBtn'){openShare();return;}
+  if(e.target.id==='shCopy'){copyShare();return;}
+  if(e.target.id==='shFile'){fileShare();return;}
   if(e.target.id==='syncBtn'){resync(true);return;}
   const a=e.target.closest('[data-act]');if(!a)return;
   if(a.tagName==='TR'&&e.target.closest('button')&&e.target.closest('button')!==a.querySelector('button.lnk'))return;
@@ -991,8 +1005,8 @@ document.addEventListener('click',e=>{
     case'goKind':S.ukind=arg;S.uq='';S.upage=1;go('users');break;
     case'goClass':S.cls=+arg;go('classes');break;
     case'selClass':S.cls=arg===''||S.cls===+arg?null:+arg;render();if(S.cls)$('#clsDetail').scrollIntoView({behavior:'smooth',block:'nearest'});break;
-    case'goClassRows':S.det={...d,cls:arg,user:'',flag:'',q:'',page:0};go('detail');break;
-    case'goUser':S.det={...d,user:arg,cls:'',flag:'',q:'',page:0};go('detail');break;
+    case'goClassRows':if(SNAP)break;S.det={...d,cls:arg,user:'',flag:'',q:'',page:0};go('detail');break;
+    case'goUser':if(SNAP)break;S.det={...d,user:arg,cls:'',flag:'',q:'',page:0};go('detail');break;
     case'clearUser':d.user='';d.page=0;render();break;
     case'goFlag':S.det={...d,flag:arg,user:'',cls:'',q:'',page:0};go('detail');break;
     case'resetDet':S.det={q:'',cls:'',mode:'',status:'',size:'',flag:'',user:'',sort:'t',dir:-1,page:0};render();break;
@@ -1028,6 +1042,7 @@ document.addEventListener('change',e=>{
   else if(id==='oMerge'){S.merge=e.target.checked;S.det.user='';S.upage=1;savePrefs();render();$('details.opt').open=true;}
   else if(id==='oJob'){S.showJob=e.target.checked;savePrefs();render();$('details.opt').open=true;}
   else if(id==='startIn'){if(/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)){S.startDate=e.target.value;savePrefs();if(S.preset==='start')applyPreset();header();render();}}
+  else if(id==='shPersonal')openShare(e.target.checked);
   else if(id==='cSort'){S.sortCls=e.target.checked;render();}
   else if(id==='cmpGrade'){S.cmpGrade=e.target.value;render();}
   else if(id==='ukind'){S.ukind=e.target.value;S.upage=1;renderUsersTable();}
@@ -1060,6 +1075,7 @@ window.addEventListener('dragleave',e=>{dragN=e.relatedTarget?Math.max(0,dragN-1
 window.addEventListener('dragover',e=>{if(e.dataTransfer&&[...e.dataTransfer.types].includes('Files'))e.preventDefault();});
 window.addEventListener('drop',async e=>{
   e.preventDefault();dragN=0;$('#overlay').style.display='none';
+  if(SNAP)return;
   const dt=e.dataTransfer;if(!dt)return;
   const out=[];
   if(dt.items&&dt.items.length&&dt.items[0].webkitGetAsEntry){
@@ -1129,14 +1145,101 @@ function exportUnreg(){
   notify('已下載「帳號對照表.csv」:在「班級」欄填入班號(如 803),存檔後放進「資料」資料夾並拖進網頁,該帳號就會歸入該班。');
 }
 
+/* ================= 分享 =================
+   把目前期間的「彙總統計」壓縮後放進網址的 # 之後(不會傳到任何伺服器)。
+   收到的人不需要資料檔;不含逐筆紀錄與工作名稱。老師個人帳號預設併成一列,勾選才列出。 */
+const SITE='https://rogerdestroy.github.io/print-stats/';
+const SNAP_TABS=['overview','classes','users'];
+const OTHER_NAME='其他帳號(未列出)';
+const LONG_URL=4000;
+let shareUrl='';
+async function gzipB64(str){
+  const buf=await new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+  let t='';for(const b of new Uint8Array(buf))t+=String.fromCharCode(b);
+  return btoa(t).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+async function gunzipB64(b64){
+  const bin=atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+  const u=Uint8Array.from(bin,c=>c.charCodeAt(0));
+  return new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+}
+function buildPayload(incl){
+  const ai=new Map(),a=[],zi=new Map(),z=[],rows=new Map();
+  for(const o of CUR){
+    if(o.m==='Scan')continue;
+    const show=o.a.k==='class'||incl,name=show?o.u:OTHER_NAME;
+    if(!ai.has(name)){ai.set(name,a.length);a.push(show?[name,o.a.k,o.a.c,o.a.s]:[name,'staff',0,'']);}
+    if(!zi.has(o.z)){zi.set(o.z,z.length);z.push(o.z);}
+    const key=[ai.get(name),o.ym,o.m,zi.get(o.z)].join('|');
+    const r=rows.get(key)||[ai.get(name),o.ym,o.m,zi.get(o.z),0,0,0,0];
+    r[4]+=o.c[3];r[5]+=o.l;r[6]+=o.sp;r[7]+=o.w;rows.set(key,r);
+  }
+  for(const r of rows.values())r[4]=rd(r[4]);
+  return{v:1,by:new Date().toISOString().slice(0,10),p:periodText(),t:SNAP_TABS.includes(S.tab)?S.tab:'overview',m:S.metric,c:S.cls,g:S.cmpGrade,a,z,r:[...rows.values()]};
+}
+async function openShare(incl=false){   // 每次開啟預設不列出個人帳號
+  shareUrl=SITE+'#s='+await gzipB64(JSON.stringify(buildPayload(incl)));
+  const long=shareUrl.length>LONG_URL;
+  $('#dlgBody').innerHTML=`<h2 style="margin:0 0 8px;font-size:17px">分享目前的統計</h2>
+   <div class="hint" style="line-height:1.7">期間 <b>${periodText()}</b>。對方打開連結就能看總覽、班級、使用者,不需要資料檔。<br>只含彙總數字,不含逐筆紀錄與工作名稱;內容固定在產生當下,不會更新。<br>統計內容就在連結裡,拿到連結的人都看得到。</div>
+   <label class="hint" style="display:block;margin:10px 0"><input type="checkbox" id="shPersonal"${incl?' checked':''}> 列出老師個人帳號的用量(未勾選時併成一列「${OTHER_NAME}」)</label>
+   <textarea id="shUrl" readonly rows="3" style="width:100%;font:12px monospace;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px" aria-label="分享連結">${esc(shareUrl)}</textarea>
+   ${long?`<div class="notice" style="margin:8px 0">連結較長(${fI(shareUrl.length)} 字元),部分通訊軟體可能截斷。建議改用「下載成檔案」,把檔案傳給對方。</div>`:''}
+   <div class="bar-row" style="margin-top:8px"><button class="btn" id="shCopy">複製連結</button><button class="btn alt" id="shFile">下載成檔案</button></div>`;
+  if(!$('#dlg').open)$('#dlg').showModal();
+}
+async function copyShare(){
+  try{await navigator.clipboard.writeText(shareUrl);}
+  catch(e){const t=$('#shUrl');t.focus();t.select();document.execCommand('copy');}
+  $('#shCopy').textContent='已複製 ✓';
+}
+function fileShare(){
+  const u=esc(shareUrl),html=`<!doctype html><meta charset="utf-8"><title>影印紙用印量統計</title><script>location.replace(${JSON.stringify(shareUrl)})<\/script><a href="${u}">開啟統計</a>`;
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));
+  a.download=`印量統計分享_${stamp()}.html`;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+// 連結內容來自外部,全部檢查過才使用
+function loadSnapshot(p){
+  if(!p||p.v!==1||!Array.isArray(p.a)||!Array.isArray(p.r)||!Array.isArray(p.z)||p.r.length>100000)throw new Error('bad');
+  const n=v=>{const x=Number(v);if(!isFinite(x)||x<0)throw new Error('bad');return x;};
+  const A=p.a.map(x=>{
+    const name=String(x[0]).slice(0,100),c=CLASS_SET.has(+x[2])?+x[2]:0;
+    let k=['class','staff','unknown'].includes(x[1])?x[1]:'staff';if(k==='class'&&!c)k='staff';
+    ACCT.set(name,{k,c:k==='class'?c:0,s:String(x[3]||'').slice(0,40),p:name,reg:k!=='unknown'});
+    return name;
+  });
+  R=p.r.map((x,i)=>{
+    if(!/^\d{4}-\d{2}$/.test(x[1])||A[x[0]]===undefined)throw new Error('bad');
+    const u=A[x[0]];
+    return{i,f:0,row:0,t:'',m:String(x[2]).slice(0,10),id:'',j:'',u,u0:'',s:'Done',z:String(p.z[x[3]]||'').slice(0,40),d:'',k:'',h:0,l:n(x[5]),p:0,e:-1,g:0,sh:'',day:x[1]+'-01',ym:x[1],c:[0,0,0,n(x[4])],sp:n(x[6]),w:n(x[7]),a:ACCT.get(u),fl:0};
+  });
+  ALL_YM=[...new Set(R.map(o=>o.ym))].sort();
+  YM_MIN=ALL_YM[0]||'';YM_MAX=ALL_YM[ALL_YM.length-1]||'';
+  MONTHS=ALL_YM.length?ymRange(YM_MIN,YM_MAX):[];
+  MIN_DAY=YM_MIN&&YM_MIN+'-01';MAX_DAY=YM_MAX&&YM_MAX+'-31';
+  S.preset='custom';S.from=MIN_DAY;S.to=MAX_DAY;S.merge=false;S.showJob=false;
+  S.tab=SNAP_TABS.includes(p.t)?p.t:'overview';
+  if(METRIC[p.m])S.metric=p.m;
+  if(CLASS_SET.has(p.c))S.cls=p.c;
+  if(GRADES.some(g=>g.code===p.g))S.cmpGrade=p.g;
+  SNAP={p:/^[\d\/–]+$/.test(p.p)?p.p:'—',by:/^\d{4}-\d{2}-\d{2}$/.test(p.by)?p.by:''};
+}
+window.addEventListener('hashchange',()=>location.reload());
+
 /* ================= 啟動 ================= */
-window.PrintStat={ingest,syncDir,FS,state:()=>({R,FILES,REG,CUR,S,SRC}),group,fee};
+window.PrintStat={ingest,syncDir,FS,buildPayload,state:()=>({R,FILES,REG,CUR,S,SRC}),group,fee};
 (async()=>{
-  await loadCache();
-  rebuildAll();
+  const m=location.hash.match(/^#s=([\w-]+)$/);
+  if(m){
+    try{loadSnapshot(JSON.parse(await gunzipB64(m[1])));}
+    catch(e){SNAP=null;R=[];ACCT=new Map();notify('這個分享連結無法讀取,可能不完整(被通訊軟體截斷)。請對方重新傳一次,或改傳檔案。','err');}
+  }
+  if(!SNAP){await loadCache();rebuildAll();}
   header();
   render();
   syncBtn();
+  if(SNAP){updateBanner();return;}
   if(FS.handle){if(await ensurePerm(false))syncDir();else updateBanner();}
 })();
 })();
